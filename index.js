@@ -5,7 +5,16 @@ const { Partials } = require('discord.js');
 
 require('dotenv').config();
 
-const waypoints = {};
+// load waypoints from disk if available
+let w;
+try {
+	w = require('./waypoints.json')
+}
+catch {
+	w = {};
+}
+
+const waypoints = w;
 const inregions = {};
 const last_seen = {};
 const last_transition = {};
@@ -74,6 +83,7 @@ function all_waypoints() {
 function get_wp(name) {
 	return all_waypoints().find(wp => wp.desc === name);
 }
+const wp2str = (wp) => `**${wp.desc}** [(${wp.lat}, ${wp.lon}, +-${wp.rad}m)](${linkto(wp.lat, wp.lon)})`;
 
 function notquiteiso(d) {
 	// yyyy-mm-ddThh:mm:ss
@@ -83,7 +93,12 @@ function notquiteiso(d) {
 
 discord_client.on('clientReady', () => {
 	console.log(`Logged in as ${discord_client.user.tag}`);
-	discord_send("Pls upload waypoints");
+	const serialize_wps = (wps) => wps.reduce((acc, wp) => acc += `\n* ${wp.desc}`, "");
+	let wps = Object.keys(waypoints).reduce((acc, user) => acc += `\n# ${user}` + serialize_wps(waypoints[user]), "");
+	if (!wps) {
+		wps = " No waypoints have been preconfigured.";
+	}
+	discord_send("Reincarnated. Waypoints reset." + wps);
 });
 
 discord_client.on('messageCreate', async message => {
@@ -208,18 +223,18 @@ mqtt_client.on('message', (topic, message) => {
 
 			const added = new_waypoints.filter(x => !old_waypoints.includes(x)).map(x => {
 				const wp = data.waypoints.find(wp => wp.desc === x);
-				return `\\+ **${wp.desc}** [(${wp.lat}, ${wp.lon}, +-${wp.rad}m)](${linkto(wp.lat, wp.lon)})`;
+				return `\\+ ${wp2str(wp)}`;
 			});
 			const removed = old_waypoints.filter(x => !new_waypoints.includes(x)).map(x => {
 				const wp = waypoints[user].find(wp => wp.desc === x);
-				return `\\- **${wp.desc}** [(${wp.lat}, ${wp.lon}, +-${wp.rad}m)](${linkto(wp.lat, wp.lon)})`;
+				return `\\- ${wp2str(wp)}`;
 			});
 			const modified = same_waypoints.map(wp_desc => {
 				// compare lat,lon,rad
 				const new_wp = data.waypoints.find(wp => wp.desc === wp_desc);
 				const old_wp = waypoints[user].find(wp => wp.desc === wp_desc);
 				if (new_wp.lat !== old_wp.lat || new_wp.lon !== old_wp.lon || new_wp.rad !== old_wp.rad) {
-					return `\\~ **${wp_desc}** [(${old_wp.lat}, ${old_wp.lon}, +-${old_wp.rad}m)](${linkto(old_wp.lat, old_wp.lon)}) -> [(${new_wp.lat}, ${new_wp.lon}, +-${new_wp.rad}m)](${linkto(new_wp.lat, new_wp.lon)})`;
+					return `<~ ${wp2str(wp)}\n~> ${wp2str(wp)}`;
 				}
 			}).filter(x => x !== undefined);
 
