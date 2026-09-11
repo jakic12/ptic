@@ -10,4 +10,6 @@ MQTT_USERNAME=your_mqtt_username
 MQTT_PASSWORD=your_mqtt_password
 DISCORD_CHANNEL_ID=1234567890123456789
 OWNTRACKS_URL=https://user:basicauth@owntracks.example.com
+OWNTRACKS_PASS=user:basicauth
+OWNTRACKS_LOCATION_API_URL=https://owntracks.example.com/owntracks/api/0/locations
 ```

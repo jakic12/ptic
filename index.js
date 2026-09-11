@@ -25,6 +25,8 @@ if (!TOKEN) {
 	process.exit(1);
 }
 
+const OWNTRACKS_PASS = process.env.OWNTRACKS_PASS;
+
 const discord_client = new Client({
 	intents: [
 		GatewayIntentBits.Guilds,
@@ -91,6 +93,174 @@ function notquiteiso(d) {
 	return quiteiso.split('.')[0];
 }
 
+function format_human_seconds (input_time_seconds) {
+    function numberEnding (number) {
+        return (number > 1) ? 's' : '';
+    }
+
+    var temp = Math.floor(input_time_seconds);
+    var years = Math.floor(temp / 31536000);
+	let out = "";
+    if (years) {
+        out += ' ' + years + ' year' + numberEnding(years);
+    }
+    //TODO: Months! Maybe weeks? 
+    var days = Math.floor((temp %= 31536000) / 86400);
+    if (days) {
+        out += ' ' + days + ' day' + numberEnding(days);
+    }
+    var hours = Math.floor((temp %= 86400) / 3600);
+    if (hours) {
+        out += ' ' + hours + ' hour' + numberEnding(hours);
+    }
+    var minutes = Math.floor((temp %= 3600) / 60);
+    if (minutes) {
+        out += ' ' + minutes + ' minute' + numberEnding(minutes);
+    }
+    var seconds = temp % 60;
+    if (seconds) {
+        out += ' ' + seconds + ' second' + numberEnding(seconds);
+    }
+	if (out.length == 0) {
+		return 'less than a second'; //'just now' //or other string you like;
+	} else {
+		return out.substring(1);
+	}
+}
+
+
+const get_regions = (data) => {
+	const new_regions = [];
+	// check all waypoints of all users
+	for (const [u, wps] of Object.entries(waypoints)) {
+		for (const wp of wps) {
+			const distance = haversineMeters(data.lat, data.lon, wp.lat, wp.lon);
+			console.log(distance, wp.desc)
+			if (distance < wp.rad) {
+				new_regions.push(wp);
+			}
+		}
+	}
+
+	return new_regions
+}
+
+function to_local_meters(lat, lon, originLat, originLon) {
+    const R = 6371000;
+    const toRad = (deg) => (deg * Math.PI) / 180;
+    const x = toRad(lon - originLon) * Math.cos(toRad(originLat)) * R;
+    const y = toRad(lat - originLat) * R;
+    return { x, y };
+}
+
+// ---- Find fraction t in [0,1] along segment (p0 -> p1) where it crosses
+// ---- the circle centered at wp with radius wp.rad (meters). Returns null
+// ---- if there's no crossing in that range (shouldn't happen if callers
+// ---- only call this when inside/outside status differs between p0 and p1).
+function get_crossing_fraction(p0, p1, wp) {
+    const a = to_local_meters(p0.lat, p0.lon, wp.lat, wp.lon);
+    const b = to_local_meters(p1.lat, p1.lon, wp.lat, wp.lon);
+ 
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+ 
+    // Solve |a + t*(b-a)|^2 = r^2  =>  quadratic in t
+    const A = dx * dx + dy * dy;
+    const B = 2 * (a.x * dx + a.y * dy);
+    const C = a.x * a.x + a.y * a.y - wp.rad * wp.rad;
+ 
+    if (A === 0) return null; // p0 === p1, no meaningful line
+ 
+    const disc = B * B - 4 * A * C;
+    if (disc < 0) return null; // line doesn't intersect circle at all
+ 
+    const sqrtDisc = Math.sqrt(disc);
+    const t1 = (-B - sqrtDisc) / (2 * A);
+    const t2 = (-B + sqrtDisc) / (2 * A);
+ 
+    // We expect exactly one root in [0,1] when one endpoint is inside and
+    // the other outside. Collect valid roots and return the one in range.
+    const candidates = [t1, t2].filter((t) => t >= 0 && t <= 1);
+    if (candidates.length === 0) return null;
+ 
+    // If both are in range (segment clips the circle twice), pick the first
+    // crossing — the relevant one for splitting time at a boundary transition.
+    return Math.min(...candidates);
+}
+
+const get_time_spent_histogram = (points) => {
+	const histogram = {}; // desc -> total seconds
+    let prev_regions;
+    let prev_point;
+ 
+    const addTime = (desc, seconds) => {
+		console.log("add time", desc, seconds)
+        if (seconds <= 0) return;
+        histogram[desc] = (histogram[desc] || 0) + seconds;
+    };
+ 
+    for (let i = 0; i < points.length; i++) {
+        const current = points[i];
+        const regions = get_regions(current);
+ 
+        if (prev_point !== undefined) {
+            const deltaSeconds = current.tst - prev_point.tst;
+            if (deltaSeconds < 0) {
+                console.error("get_time_spent_histogram encountered an unordered point");
+                prev_point = current;
+                prev_regions = regions;
+                continue;
+            }
+ 
+            const prevDescs = (prev_regions || []).map((r) => r.desc);
+            const currDescs = regions.map((r) => r.desc);
+ 
+            const arrived = regions.filter((r) => !prevDescs.includes(r.desc));
+            const departed = (prev_regions || []).filter((r) => !currDescs.includes(r.desc));
+            const stayed = regions.filter((r) => prevDescs.includes(r.desc));
+
+			console.log(arrived, departed, stayed);
+ 
+            // Stayed in this region the whole interval -> full delta
+            for (const wp of stayed) {
+                addTime(wp.desc, deltaSeconds);
+            }
+ 
+            // Departed a region partway through -> credit time up to the crossing
+            for (const wp of departed) {
+                const t = get_crossing_fraction(prev_point, current, wp);
+                const seconds = t === null ? deltaSeconds : deltaSeconds * t;
+                addTime(wp.desc, seconds);
+            }
+ 
+            // Arrived at a region partway through -> credit time after the crossing
+            for (const wp of arrived) {
+                const t = get_crossing_fraction(prev_point, current, wp);
+                const seconds = t === null ? 0 : deltaSeconds * (1 - t);
+                addTime(wp.desc, seconds);
+            }
+ 
+            // Neither point matched any region -> "unknown"
+            if (stayed.length === 0 && arrived.length === 0 && departed.length === 0) {
+                addTime("unknown", deltaSeconds);
+            }
+        }
+ 
+        prev_point = current;
+        prev_regions = regions;
+    }
+ 
+    return histogram;
+}
+
+const fetch_owntracks_locations = (url) => 
+	new Promise((res, rej) => fetch(url, {
+		"headers": {
+			"authorization": `Basic ${btoa(OWNTRACKS_PASS)}`,
+		},
+	}).then(x => x.json()).then(x => res(x)))
+
+
 discord_client.on('clientReady', () => {
 	console.log(`Logged in as ${discord_client.user.tag}`);
 	const serialize_wps = (wps) => wps.reduce((acc, wp) => acc += `\n* ${wp.desc}`, "");
@@ -104,9 +274,10 @@ discord_client.on('clientReady', () => {
 discord_client.on('messageCreate', async message => {
 	if (message.author.bot) return;
 
-	const re = message.content.match(/^where\s+(?<who>\w+)(?:\s(?<when>\w+))?$/i);
+	const re = message.content.match(/^where\s+(?<who>\w+)(?:\s(?<when>\w+))(?:\s(?<histwaypoint>\w+))?$/i);
 	const query = re?.groups?.who;
 	const timespan = re?.groups?.when;
+	const histwaypoint = re?.groups?.histwaypoint;
 	console.log(`Received query: ${query}, timespan: ${timespan}`);
 	console.log('re:', re);
 
@@ -170,8 +341,26 @@ discord_client.on('messageCreate', async message => {
 			params.set('start', notquiteiso(start));
 			params.set('end', notquiteiso(end));
 		}
-		const url = `${process.env.OWNTRACKS_URL}?${params.toString()}`;
-		discord_send(`${query} be like: ${url}`);
+		
+		if(histwaypoint) {
+			if (histwaypoint == 'all') {
+				const url = `${process.env.OWNTRACKS_LOCATION_API_URL}?${params.toString()}`;
+				fetch_owntracks_locations(url).then(loc => {
+					const report = `\n -`.join(Object.entries(
+						get_time_spent_histogram(loc.data)).map(
+							(waypoint, time) => 
+								`${waypoint}: **${format_human_seconds(time)}**`
+						)
+					)
+					discord_send(`${query} be like:\n -${report}`)
+				})
+			} else {
+				discord_send('<histwaypoint> should be all, others are not supported yet');	
+			}
+		} else {
+			const url = `${process.env.OWNTRACKS_URL}?${params.toString()}`;
+			discord_send(`${query} be like: ${url}`);
+		}
 	}
 });
 
@@ -266,19 +455,9 @@ mqtt_client.on('message', (topic, message) => {
 				return;
 			}
 			const prev_regions = inregions[user]; // may be undefined!
-			const new_regions = [];
 			last_seen[user] = { when: Date.now(), where: data };
 
-			// check all waypoints of all users
-			for (const [u, wps] of Object.entries(waypoints)) {
-				for (const wp of wps) {
-					const distance = haversineMeters(data.lat, data.lon, wp.lat, wp.lon);
-					console.log(`Distance from ${user} to waypoint ${wp.desc} of ${u}: ${distance} (radius: ${wp.rad})`);
-					if (distance < wp.rad) {
-						new_regions.push(wp.desc);
-					}
-				}
-			}
+			const new_regions = get_regions(data).map(x => x.desc);
 
 			if (prev_regions !== undefined) {
 				const arrived = new_regions.filter(x => !prev_regions || !prev_regions.includes(x));
