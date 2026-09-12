@@ -28,10 +28,6 @@ if (!TOKEN) {
 const API_URL = process.env.OWNTRACKS_URL + (process.env.OWNTRACKS_API_PATH ?? "owntracks/api/0");
 const BASIC_AUTH = process.env.OWNTRACKS_BASIC_AUTH;
 const FRONTEND_URL = BASIC_AUTH ? process.env.OWNTRACKS_URL.replace("://", `://${BASIC_AUTH}@`) : process.env.OWNTRACKS_URL;
-console.log(API_URL);
-console.log(BASIC_AUTH);
-console.log(FRONTEND_URL);
-console.log("done");
 
 const discord_client = new Client({
 	intents: [
@@ -153,11 +149,14 @@ const get_time_spent_histogram = (points) => {
     let prev_point;
  
     const addTime = (desc, seconds) => {
-		//console.log("add time", desc, seconds)
         if (seconds <= 0) return;
         histogram[desc] = (histogram[desc] || 0) + seconds;
     };
  
+
+	console.log(get_regions(points[0]));
+	console.log(get_regions(points[0]).sort(x => get_wp(x).rad));
+	console.log(get_regions(points[0]).sort(x => get_wp(x).rad).join(" x "));
     for (let i = 0; i < points.length; i++) {
         const current = points[i];
         const regions = get_regions(current);
@@ -225,7 +224,7 @@ discord_client.on('clientReady', () => {
 	if (!wps) {
 		wps = " No waypoints have been preconfigured.";
 	}
-	discord_send("Reincarnated. Waypoints reset." + wps);
+	discord_send(`Reincarnated. Loaded ${waypoints.system.length} system waypoints.`);
 });
 
 discord_client.on('messageCreate', async message => {
@@ -316,9 +315,9 @@ discord_client.on('messageCreate', async message => {
 						const report = Object.entries(
 							get_time_spent_histogram(loc.data.sort((a,b) => a.tst - b.tst))).map(
 								([waypoint, time]) => 
-									`${waypoint}: **${format_human_seconds(time)}**`
-							).join(`\n -`)
-						discord_send(`${query} be like:\n -${report}`)
+									`- ${waypoint}: **${format_human_seconds(time)}**`
+							).join(`\n`)
+						discord_send(`${query} been hanging around:\n${report ?? "John Cena moment"}`)
 					})
 				}).catch(console.error)
 			} else {
