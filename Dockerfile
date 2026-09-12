@@ -1,16 +1,16 @@
-FROM node:20-alpine
+FROM node:20-bookworm-slim
 
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y \
     python3 \
     make \
     g++ \
-    pkgconf \
-    cairo-dev \
-    pango-dev \
-    jpeg-dev \
-    giflib-dev \
-    pixman-dev \
-    pangomm-dev
+    pkg-config \
+    libcairo2-dev \
+    libpango1.0-dev \
+    libjpeg-dev \
+    libgif-dev \
+    librsvg2-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY package*.json ./
