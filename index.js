@@ -159,28 +159,19 @@ const get_time_spent_histogram = (points) => {
 	console.log(get_regions(points[0]).sort(x => get_wp(x).rad).join(" x "));
     for (let i = 0; i < points.length; i++) {
         const current = points[i];
-        const regions = get_regions(current);
+        const regions = get_regions(current).sort(x => get_wp(x).rad).join(", ");
  
         if (prev_point !== undefined) {
             const deltaSeconds = current.tst - prev_point.tst;
             if (deltaSeconds < 0) {
                 console.error("get_time_spent_histogram encountered an unordered point");
                 prev_point = current;
-                prev_regions = regions;
                 continue;
             }
  
-            const departed = (prev_regions || []).filter((r) => !regions.includes(r));
-            const stayed = regions.filter((r) => prev_regions.includes(r));
-
-            // Stayed in this region the whole interval -> full delta
-            for (const wp of [...stayed, ...departed]) {
-                addTime(wp, deltaSeconds);
-            }
+			addTime(regions, deltaSeconds);
         }
- 
         prev_point = current;
-        prev_regions = regions;
     }
 
 	const totalSpan = points.length > 1
