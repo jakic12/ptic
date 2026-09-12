@@ -225,7 +225,7 @@ discord_client.on('clientReady', () => {
 discord_client.on('messageCreate', async message => {
 	if (message.author.bot) return;
 
-	const re = message.content.match(/^where\s+(?<who>\w+)(?:\s(?<when>\w+))(?:\s(?<histwaypoint>\w+))?$/i);
+	const re = message.content.match(/^where\s+(?<who>\w+)(?:\s(?<when>\w+))?(?:\s(?<histwaypoint>\w+))?$/i);
 	const query = re?.groups?.who;
 	const timespan = re?.groups?.when;
 	const histwaypoint = re?.groups?.histwaypoint;
