@@ -25,7 +25,13 @@ if (!TOKEN) {
 	process.exit(1);
 }
 
-const OWNTRACKS_PASS = process.env.OWNTRACKS_PASS;
+const API_URL = process.env.OWNTRACKS_URL + (process.env.OWNTRACKS_API_PATH ?? "owntracks/api/0");
+const BASIC_AUTH = process.env.OWNTRACKS_BASIC_AUTH;
+const FRONTEND_URL = BASIC_AUTH ? process.env.OWNTRACKS_URL.replace("://", `://${BASIC_AUTH}@`) : process.env.OWNTRACKS_URL;
+console.log(API_URL);
+console.log(BASIC_AUTH);
+console.log(FRONTEND_URL);
+console.log("done");
 
 const discord_client = new Client({
 	intents: [
@@ -195,19 +201,19 @@ const get_time_spent_histogram = (points) => {
     return histogram;
 }
 
-const fetch_owntracks_devices = (user) =>  
-	new Promise((res, rej) => fetch(`${process.env.OWNTRACKS_API_URL}/list?user=${user}`, {
+const fetch_devices = (user) =>  
+	new Promise((res, rej) => fetch(`${API_URL}/list?user=${user}`, {
 		"headers": {
-			"authorization": `Basic ${btoa(OWNTRACKS_PASS)}`,
+			"authorization": `Basic ${btoa(BASIC_AUTH)}`,
 		},
 	}).then(x => x.json()).then(x => res(x.results)))
 
-const fetch_owntracks_locations = (url) => {
+const fetch_locations = (url) => {
 	console.log(url);
 
 	return new Promise((res, rej) => fetch(url, {
 		"headers": {
-			"authorization": `Basic ${btoa(OWNTRACKS_PASS)}`,
+			"authorization": `Basic ${btoa(BASIC_AUTH)}`,
 		},
 	}).then(x => x.json()).then(x => res(x)))}
 
@@ -292,10 +298,10 @@ discord_client.on('messageCreate', async message => {
 			params.set('start', notquiteiso(start));
 			params.set('end', notquiteiso(end));
 		}
-		
+
 		if(histwaypoint) {
 			if (histwaypoint == 'all') {
-				fetch_owntracks_devices(query).then(devices => {
+				fetch_devices(query).then(devices => {
 					params.set('user', query)
 					params.set('device', devices[0])
 
@@ -305,8 +311,8 @@ discord_client.on('messageCreate', async message => {
 					params.delete('start')
 					params.delete('end')
 
-					const url = `${process.env.OWNTRACKS_API_URL}/locations?${params.toString()}`;
-					return fetch_owntracks_locations(url).then(loc => {
+					const url = `${API_URL}/locations?${params.toString()}`;
+					return fetch_locations(url).then(loc => {
 						const report = Object.entries(
 							get_time_spent_histogram(loc.data.sort((a,b) => a.tst - b.tst))).map(
 								([waypoint, time]) => 
@@ -319,7 +325,7 @@ discord_client.on('messageCreate', async message => {
 				discord_send('<histwaypoint> should be all, others are not supported yet');	
 			}
 		} else {
-			const url = `${process.env.OWNTRACKS_URL}?${params.toString()}`;
+			const url = `${FRONTEND_URL}?${params.toString()}`;
 			discord_send(`${query} be like: ${url}`);
 		}
 	}
