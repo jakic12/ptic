@@ -2,6 +2,8 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const fetch = (...args) => import('node-fetch').then(mod => mod.default(...args));
 const mqtt = require("mqtt");
 const { Partials } = require('discord.js');
+const { ChartJSNodeCanvas } = require('chartjs-node-canvas');
+const ChartDataLabels = require('chartjs-plugin-datalabels');
 
 require('dotenv').config();
 
@@ -39,6 +41,16 @@ const discord_client = new Client({
 	partials: [Partials.Channel],
 });
 
+// must be global because of reasons
+const canvas = new ChartJSNodeCanvas({
+	width: 400,
+	height: 300,
+	backgroundColour: 'white',
+	chartCallback: (ChartJS) => {
+		ChartJS.register(ChartDataLabels);
+	}
+});
+
 // stupid fucking formula
 function haversineMeters(lat1, lon1, lat2, lon2) {
 	const R = 6371000; // meters
@@ -54,12 +66,12 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
 
 	return 2 * R * Math.asin(Math.sqrt(a));
 }
-function discord_send(content) {
+
+function discord_send(content, files) {
 	discord_client.channels.fetch(process.env.DISCORD_CHANNEL_ID)
 		.then(channel => {
-			channel.send(content);
-		}
-		)
+			channel.send({content, files})
+		})
 		.catch(console.error);
 }
 function ago(d) {
@@ -143,24 +155,66 @@ const get_regions = (data) => {
 	return [...new_regions]
 }
 
+async function pie(hist) {
+	const total_time = Object.values(hist).reduce((acc, v) => acc+v);
+	const configuration = {
+		type: 'pie',
+		data: {
+			labels: Object.keys(hist),
+			datasets: [{
+				data: Object.values(hist).map(x => x * 100 / total_time),
+			}],
+		},
+		options: {
+			responsive: false,
+			animation: false,
+			plugins: {
+				legend: {
+					display: false,
+					// position: "top",
+					// labels: {
+					//     pointStyle: "circle",
+					//     font: {
+					//         size: 14,
+					//         weight: "bold"
+					//     }
+					// }
+				},
+				datalabels: {
+					color: '#333333',
+					font: {
+						size: 14,
+						weight: "bold",
+						anchor: "end",
+					},
+					formatter: (value, context) => {
+						return context.chart.data.labels[context.dataIndex];
+					}
+				}
+			}
+		},
+	};
+
+	return await canvas.renderToBuffer(configuration);
+}
 const get_time_spent_histogram = (points) => {
-	const histogram = {}; // desc -> total seconds
-    let prev_regions;
+	const hist_separate = {}; // desc -> total seconds
+	const hist_combined = {}; // desc -> total seconds
     let prev_point;
  
-    const addTime = (desc, seconds) => {
+    const addTime = (histogram, desc, seconds) => {
         if (seconds <= 0) return;
         histogram[desc] = (histogram[desc] || 0) + seconds;
     };
- 
 
 	console.log(get_regions(points[0]));
 	console.log(get_regions(points[0]).sort(x => get_wp(x).rad));
 	console.log(get_regions(points[0]).sort(x => get_wp(x).rad).join(" x "));
     for (let i = 0; i < points.length; i++) {
         const current = points[i];
-        const regions = get_regions(current).sort(x => get_wp(x).rad).join(", ");
- 
+		const regions_separate = get_regions(current);
+        const regions_combined = regions_separate.sort(x => get_wp(x).rad).join(", ") || "unknown";
+
         if (prev_point !== undefined) {
             const deltaSeconds = current.tst - prev_point.tst;
             if (deltaSeconds < 0) {
@@ -169,7 +223,10 @@ const get_time_spent_histogram = (points) => {
                 continue;
             }
  
-			addTime(regions, deltaSeconds);
+			for (const wp of regions_separate) {
+                addTime(hist_separate, wp, deltaSeconds);
+            }
+			addTime(hist_combined, regions_combined, deltaSeconds);
         }
         prev_point = current;
     }
@@ -178,17 +235,14 @@ const get_time_spent_histogram = (points) => {
     ? points.at(-1).tst - points[0].tst
     : 0;
 
-	const histogramTotal = Object.values(histogram)
-		.reduce((sum, seconds) => sum + seconds, 0);
-
 	console.log("POINT COUNT:", points.length);
 	console.log("FIRST TST:", points[0]?.tst);
 	console.log("LAST TST:", points.at(-1)?.tst);
 	console.log("TOTAL SPAN:", format_human_seconds(totalSpan));
-	console.log("HISTOGRAM:", histogram);
-	console.log("HISTOGRAM TOTAL:", format_human_seconds(histogramTotal));
- 
-    return histogram;
+	console.log("HISTOGRAMS:", hist_separate, hist_combined);
+
+    // return hist_separate;
+	return hist_combined;
 }
 
 const fetch_devices = (user) =>  
@@ -303,12 +357,19 @@ discord_client.on('messageCreate', async message => {
 
 					const url = `${API_URL}/locations?${params.toString()}`;
 					return fetch_locations(url).then(loc => {
-						const report = Object.entries(
-							get_time_spent_histogram(loc.data.sort((a,b) => a.tst - b.tst))).map(
-								([waypoint, time]) => 
-									`- ${waypoint}: **${format_human_seconds(time)}**`
-							).join(`\n`)
-						discord_send(`${query} been hanging around:\n${report ?? "John Cena moment"}`)
+						const histogram = get_time_spent_histogram(loc.data.sort((a,b) => a.tst - b.tst));
+						const report = Object.entries(histogram).map(
+							([waypoint, time]) => `- ${waypoint}: **${format_human_seconds(time)}**`
+						).join(`\n`);
+						console.log(histogram);
+
+						pie(histogram).then(img => {
+							files = [{
+								attachment: img,
+								name: "histogram.png",
+							}]
+							discord_send(`${query} been hanging around:\n${report ?? "John Cena moment"}`, files);
+						});
 					})
 				}).catch(console.error)
 			} else {

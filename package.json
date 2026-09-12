@@ -1,5 +1,8 @@
 {
   "dependencies": {
+    "chart.js": "^4.5.1",
+    "chartjs-node-canvas": "^5.0.0",
+    "chartjs-plugin-datalabels": "^2.2.0",
     "cheerio": "^1.0.0",
     "discord.js": "^14.18.0",
     "dotenv": "^16.4.7",
