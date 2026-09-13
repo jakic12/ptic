@@ -209,7 +209,7 @@ const get_time_spent_histogram = (points) => {
     for (let i = 0; i < points.length; i++) {
         const current = points[i];
 		const regions_separate = get_regions(current);
-        const regions_combined = regions_separate.sort(x => x.rad).map(x => x.desc).join(", ") || "unknown";
+        const regions_combined = regions_separate.sort((a,b) => a.rad - b.rad).map(x => x.desc).join(", ") || "unknown";
 
         if (prev_point !== undefined) {
             const deltaSeconds = current.tst - prev_point.tst;
