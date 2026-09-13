@@ -145,9 +145,8 @@ const get_regions = (data) => {
 	for (const [u, wps] of Object.entries(waypoints)) {
 		for (const wp of wps) {
 			const distance = haversineMeters(data.lat, data.lon, wp.lat, wp.lon);
-			//console.log(distance, wp.desc)
 			if (distance < wp.rad) {
-				new_regions.add(wp.desc);
+				new_regions.add(wp);
 			}
 		}
 	}
@@ -207,13 +206,10 @@ const get_time_spent_histogram = (points) => {
         histogram[desc] = (histogram[desc] || 0) + seconds;
     };
 
-	console.log(get_regions(points[0]));
-	console.log(get_regions(points[0]).sort(x => get_wp(x).rad));
-	console.log(get_regions(points[0]).sort(x => get_wp(x).rad).join(" x "));
     for (let i = 0; i < points.length; i++) {
         const current = points[i];
 		const regions_separate = get_regions(current);
-        const regions_combined = regions_separate.sort(x => get_wp(x).rad).join(", ") || "unknown";
+        const regions_combined = regions_separate.sort(x => x.rad).map(x => x.desc).join(", ") || "unknown";
 
         if (prev_point !== undefined) {
             const deltaSeconds = current.tst - prev_point.tst;
@@ -224,7 +220,7 @@ const get_time_spent_histogram = (points) => {
             }
  
 			for (const wp of regions_separate) {
-                addTime(hist_separate, wp, deltaSeconds);
+                addTime(hist_separate, wp.desc, deltaSeconds);
             }
 			addTime(hist_combined, regions_combined, deltaSeconds);
         }
