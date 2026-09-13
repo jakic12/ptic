@@ -268,112 +268,167 @@ discord_client.on('clientReady', () => {
 	discord_send(`Reincarnated. Loaded ${waypoints.system.length} system waypoints.`);
 });
 
+async function getLatLon(shortUrl) {
+	const response = await fetch(shortUrl, {
+		redirect: "follow"
+	});
+
+	const finalUrl = response.url;
+
+	const match = finalUrl.match(
+		/\/search\/(-?\d+(?:\.\d+)?),\+?(-?\d+(?:\.\d+)?)/
+	);
+
+
+	if (!match) {
+		throw new Error(`Could not find coordinates in: ${finalUrl}`);
+	}
+
+	return {
+		lat: match[1],
+		lon: match[2]
+	};
+}
+const TEMP_WAYPOINT_USER = 'system';
+
 discord_client.on('messageCreate', async message => {
 	if (message.author.bot) return;
 
-	const re = message.content.match(/^where\s+(?<who>\w+)(?:\s(?<when>\w+))?(?:\s(?<histwaypoint>\w+))?$/i);
-	const query = re?.groups?.who;
-	const timespan = re?.groups?.when;
-	const histwaypoint = re?.groups?.histwaypoint;
-	console.log(`Received query: ${query}, timespan: ${timespan}`);
-	console.log('re:', re);
+	if(message.content.startsWith('notify')) {
+		const re_notify = message.content.match(/^notify\s+(?<who>\w+)(?:\s(?<where>[^\s]+))(?:\s(?<range>[^\s]+))?(?:\s(?<name>.+))?$/i);
+		const target = re_notify?.groups?.who;
+		const temp_waypoint = re_notify?.groups?.where;
+		const range = re_notify?.groups?.range || '100';
 
-	if (!query) return;
+		let waypoint_obj = {}
+		waypoint_obj.desc = re_notify?.groups?.name || `Temp waypoint ${Math.random()}`;
 
-	if (!last_seen[query]) {
-		discord_send(`${query} who?`);
-		return;
-	}
-
-	if (!timespan) {
-		const loc = last_seen[query].where;
-		const locstr = `[(${loc.lat}, ${loc.lon}) +-${loc.acc}m](${linkto(loc.lat, loc.lon)})`;
-		const timestr = ago(last_seen[query].when);
-		// left FRI 3s ago / arrived at HOME 5m ago / no waypoint activity yet
-		let last_transition_str = "no waypoint activity yet";
-		if (last_transition[query]) {
-			if (last_transition[query].enter) {
-				last_transition_str = `arrived at`;
-			} else {
-				last_transition_str = `left`;
-			}
-			const wp = get_wp(last_transition[query].name);
-			const wp_link = linkto(wp.lat, wp.lon);
-			last_transition_str += ` [${last_transition[query].name}](${wp_link})`;
-
-			const when_str = ago(last_transition[query].when);
-			last_transition_str += ` ${when_str}`;
-		}
-		discord_send(`${query} was at ${locstr} ${timestr} (${last_transition_str}).`);
-	}
-	else {
-		const now = Date.now();
-		const timespan_re = timespan.match(/^(\d+)([mhd])$/) || timespan.match(/^(today|yesterday)$/i);
-		if (!timespan_re) {
-			discord_send(`Invalid timespan format. Supports: "today", "yesterday", or an integer followed by "m", "h", or "d".`);
+		if (waypoints[TEMP_WAYPOINT_USER].filter(x => x.desc == waypoint_obj.desc)?.length != 0) {
+			discord_send(`waypoint with desc ${waypoint_obj.desc} already exists`);
 			return;
 		}
 
-		const params = new URLSearchParams();
-		params.set('user', query);
-		if (timespan_re[2]) {
-			const amount = parseInt(timespan_re[1]);
-			const unit = timespan_re[2];
-			let start;
-			if (unit === 'm') start = new Date(now - amount * 60 * 1000);
-			else if (unit === 'h') start = new Date(now - amount * 3600 * 1000);
-			else if (unit === 'd') start = new Date(now - amount * 24 * 3600 * 1000);
-			params.set('start', notquiteiso(start));
-			params.set('end', notquiteiso(new Date()));
-		} else {
-			const day = timespan_re[1].toLowerCase();
-			let start = new Date();
-			let end = new Date();
-			start.setHours(0, 0, 0, 0);
-			end.setHours(23, 59, 59, 999);
-			if (day === 'yesterday') {
-				start.setDate(start.getDate() - 1);
-				end.setDate(end.getDate() - 1);
-			}
-			params.set('start', notquiteiso(start));
-			params.set('end', notquiteiso(end));
+		waypoint_obj = {...waypoint_obj, ...(await getLatLon(temp_waypoint))};
+		waypoint_obj.tag_discord_user_id = message.author.id;
+		waypoint_obj.temp = true;
+		waypoint_obj.rad = range;
+		waypoint_obj.target_filter = [target];
+
+		// memory safe :)
+		if (waypoints[TEMP_WAYPOINT_USER].filter(x => x.desc == waypoint_obj.desc)?.length != 0) {
+			discord_send(`waypoint with desc ${waypoint_obj.desc} already exists`);
+			return;
 		}
 
-		if(histwaypoint) {
-			if (histwaypoint == 'all') {
-				fetch_devices(query).then(devices => {
-					params.set('user', query)
-					params.set('device', devices[0])
+		waypoints[TEMP_WAYPOINT_USER].push(waypoint_obj);
+		
+		discord_send(`Ok, will notify when ${target} enters the location.\n${JSON.stringify(waypoint_obj, undefined, 4)}`);
 
-					// stupid parameter rewrite
-					params.set('from', params.get('start'))
-					params.set('to', params.get('end'))
-					params.delete('start')
-					params.delete('end')
-
-					const url = `${API_URL}/locations?${params.toString()}`;
-					return fetch_locations(url).then(loc => {
-						const histogram = get_time_spent_histogram(loc.data.sort((a,b) => a.tst - b.tst));
-						const report = Object.entries(histogram).map(
-							([waypoint, time]) => `- ${waypoint}: **${format_human_seconds(time)}**`
-						).join(`\n`);
-						console.log(histogram);
-
-						pie(histogram).then(img => {
-							files = [{
-								attachment: img,
-								name: "histogram.png",
-							}]
-							discord_send(`${query} been hanging around:\n${report ?? "John Cena moment"}`, files);
-						});
-					})
-				}).catch(console.error)
-			} else {
-				discord_send('<histwaypoint> should be all, others are not supported yet');	
+	} else if(message.content.startsWith('where')) {
+		const re = message.content.match(/^where\s+(?<who>\w+)(?:\s(?<when>\w+))?(?:\s(?<histwaypoint>\w+))?$/i);
+		const query = re?.groups?.who;
+		const timespan = re?.groups?.when;
+		const histwaypoint = re?.groups?.histwaypoint;
+		console.log(`Received query: ${query}, timespan: ${timespan}`);
+		console.log('re:', re);
+	
+		if (!query) return;
+	
+		if (!last_seen[query]) {
+			discord_send(`${query} who?`);
+			return;
+		}
+	
+		if (!timespan) {
+			const loc = last_seen[query].where;
+			const locstr = `[(${loc.lat}, ${loc.lon}) +-${loc.acc}m](${linkto(loc.lat, loc.lon)})`;
+			const timestr = ago(last_seen[query].when);
+			// left FRI 3s ago / arrived at HOME 5m ago / no waypoint activity yet
+			let last_transition_str = "no waypoint activity yet";
+			if (last_transition[query]) {
+				if (last_transition[query].enter) {
+					last_transition_str = `arrived at`;
+				} else {
+					last_transition_str = `left`;
+				}
+				const wp = get_wp(last_transition[query].name);
+				const wp_link = linkto(wp.lat, wp.lon);
+				last_transition_str += ` [${last_transition[query].name}](${wp_link})`;
+	
+				const when_str = ago(last_transition[query].when);
+				last_transition_str += ` ${when_str}`;
 			}
-		} else {
-			const url = `${FRONTEND_URL}?${params.toString()}`;
-			discord_send(`${query} be like: ${url}`);
+			discord_send(`${query} was at ${locstr} ${timestr} (${last_transition_str}).`);
+		}
+		else {
+			const now = Date.now();
+			const timespan_re = timespan.match(/^(\d+)([mhd])$/) || timespan.match(/^(today|yesterday)$/i);
+			if (!timespan_re) {
+				discord_send(`Invalid timespan format. Supports: "today", "yesterday", or an integer followed by "m", "h", or "d".`);
+				return;
+			}
+	
+			const params = new URLSearchParams();
+			params.set('user', query);
+			if (timespan_re[2]) {
+				const amount = parseInt(timespan_re[1]);
+				const unit = timespan_re[2];
+				let start;
+				if (unit === 'm') start = new Date(now - amount * 60 * 1000);
+				else if (unit === 'h') start = new Date(now - amount * 3600 * 1000);
+				else if (unit === 'd') start = new Date(now - amount * 24 * 3600 * 1000);
+				params.set('start', notquiteiso(start));
+				params.set('end', notquiteiso(new Date()));
+			} else {
+				const day = timespan_re[1].toLowerCase();
+				let start = new Date();
+				let end = new Date();
+				start.setHours(0, 0, 0, 0);
+				end.setHours(23, 59, 59, 999);
+				if (day === 'yesterday') {
+					start.setDate(start.getDate() - 1);
+					end.setDate(end.getDate() - 1);
+				}
+				params.set('start', notquiteiso(start));
+				params.set('end', notquiteiso(end));
+			}
+	
+			if(histwaypoint) {
+				if (histwaypoint == 'all') {
+					fetch_devices(query).then(devices => {
+						params.set('user', query)
+						params.set('device', devices[0])
+	
+						// stupid parameter rewrite
+						params.set('from', params.get('start'))
+						params.set('to', params.get('end'))
+						params.delete('start')
+						params.delete('end')
+	
+						const url = `${API_URL}/locations?${params.toString()}`;
+						return fetch_locations(url).then(loc => {
+							const histogram = get_time_spent_histogram(loc.data.sort((a,b) => a.tst - b.tst));
+							const report = Object.entries(histogram).map(
+								([waypoint, time]) => `- ${waypoint}: **${format_human_seconds(time)}**`
+							).join(`\n`);
+							console.log(histogram);
+	
+							pie(histogram).then(img => {
+								files = [{
+									attachment: img,
+									name: "histogram.png",
+								}]
+								discord_send(`${query} been hanging around:\n${report ?? "John Cena moment"}`, files);
+							});
+						})
+					}).catch(console.error)
+				} else {
+					discord_send('<histwaypoint> should be all, others are not supported yet');	
+				}
+			} else {
+				const url = `${FRONTEND_URL}?${params.toString()}`;
+				discord_send(`${query} be like: ${url}`);
+			}
 		}
 	}
 });
@@ -471,7 +526,14 @@ mqtt_client.on('message', (topic, message) => {
 			const prev_regions = inregions[user]; // may be undefined!
 			last_seen[user] = { when: Date.now(), where: data };
 
-			const new_regions = get_regions(data).map(x => x.desc);
+			let new_region_objs = get_regions(data)
+			new_region_objs = new_region_objs.filter(wp => wp.target_filter != undefined? wp.target_filter.includes(user) : true)
+
+			const region_name_to_obj = {}
+			new_region_objs.forEach(wp => {
+				region_name_to_obj[wp.desc] = wp;
+			})
+			let new_regions = new_region_objs.map(x => x.desc);
 
 			if (prev_regions !== undefined) {
 				const arrived = new_regions.filter(x => !prev_regions || !prev_regions.includes(x));
@@ -488,13 +550,23 @@ mqtt_client.on('message', (topic, message) => {
 				//	.join('\n');
 				//const loc = `bro is @ [(${data.lat}, ${data.lon})](${linkto(data.lat, data.lon)}) +-${data.acc}m. Distances:\n${distances_to_waypoints}`;
 				for (const region of arrived) {
-					discord_send(`${user} arrived at ${region}`);
+					const region_obj = region_name_to_obj[region];
+					discord_send(`${region_obj.tag_discord_user_id? `<@${region_obj.tag_discord_user_id}> `: ''}${user} arrived at ${region}`);
 					last_transition[user] = {"name": region, "enter": true, "when": Date.now()};
+
+					if(region_obj.temp) {
+						waypoints[TEMP_WAYPOINT_USER] = waypoints[TEMP_WAYPOINT_USER].filter(x => x.desc != region)
+
+						// to prevent User left temp waypoint
+						new_regions = new_regions.filter(x => x != region)
+					}
+
 				}
 				for (const region of departed) {
 					discord_send(`${user} left ${region}`);
 					last_transition[user] = {"name": region, "enter": false, "when": Date.now()};
 				}
+
 			}
 			inregions[user] = new_regions;
 		}
